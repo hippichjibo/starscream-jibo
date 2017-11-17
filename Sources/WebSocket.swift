@@ -106,6 +106,7 @@ public struct SSLSettings {
     #else
     let cipherSuites: [SSLCipherSuite]?
     #endif
+    let clientCerts: [Any]?
 }
 
 public protocol WSStreamDelegate: class {
@@ -148,7 +149,7 @@ open class FoundationStream : NSObject, WSStream, StreamDelegate  {
             outStream.setProperty(StreamSocketSecurityLevel.negotiatedSSL as AnyObject, forKey: Stream.PropertyKey.socketSecurityLevelKey)
             #if os(watchOS) //watchOS us unfortunately is missing the kCFStream properties to make this work
             #else
-                var settings = [NSObject: NSObject]()
+                var settings = [NSObject: Any]()
                 if ssl.disableCertValidation {
                     settings[kCFStreamSSLValidatesCertificateChain] = NSNumber(value: false)
                 }
@@ -159,6 +160,10 @@ open class FoundationStream : NSObject, WSStream, StreamDelegate  {
                         settings[kCFStreamSSLPeerName] = kCFNull
                     }
                 }
+                if let certificates = ssl.clientCerts {
+                    settings[kCFStreamSSLCertificates] = certificates
+                }
+                
                 inStream.setProperty(settings, forKey: kCFStreamPropertySSLSettings as Stream.PropertyKey)
                 outStream.setProperty(settings, forKey: kCFStreamPropertySSLSettings as Stream.PropertyKey)
             #endif
@@ -390,6 +395,7 @@ open class WebSocket : NSObject, StreamDelegate, WebSocketClient, WSStreamDelega
     #else
     public var security: SSLTrustValidator?
     public var enabledSSLCipherSuites: [SSLCipherSuite]?
+    public var clientCertificates: [Any]?
     #endif
     
     public var isConnected: Bool {
@@ -638,7 +644,8 @@ open class WebSocket : NSObject, StreamDelegate, WebSocketClient, WSStreamDelega
                                        disableCertValidation: disableSSLCertValidation,
                                        overrideTrustHostname: overrideTrustHostname,
                                        desiredTrustHostname: desiredTrustHostname,
-                                       cipherSuites: self.enabledSSLCipherSuites)
+                                       cipherSuites: self.enabledSSLCipherSuites,
+                                       clientCerts: clientCertificates)
         #endif
         certValidated = !useSSL
         let timeout = request.timeoutInterval * 1_000_000
