@@ -105,8 +105,8 @@ public struct SSLSettings {
     #if os(Linux)
     #else
     let cipherSuites: [SSLCipherSuite]?
-    #endif
     let clientCerts: [Any]?
+    #endif
 }
 
 public protocol WSStreamDelegate: class {
