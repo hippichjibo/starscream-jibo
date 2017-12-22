@@ -133,6 +133,8 @@ open class FoundationStream : NSObject, WSStream, StreamDelegate  {
     private var outputStream: OutputStream?
     public weak var delegate: WSStreamDelegate?
     let BUFFER_MAX = 4096
+	
+	public var enableSOCKSProxy = false
     
     public func connect(url: URL, port: Int, timeout: TimeInterval, ssl: SSLSettings, completion: @escaping ((Error?) -> Void)) {
         var readStream: Unmanaged<CFReadStream>?
@@ -141,6 +143,18 @@ open class FoundationStream : NSObject, WSStream, StreamDelegate  {
         CFStreamCreatePairWithSocketToHost(nil, h, UInt32(port), &readStream, &writeStream)
         inputStream = readStream!.takeRetainedValue()
         outputStream = writeStream!.takeRetainedValue()
+
+        #if os(watchOS) //watchOS us unfortunately is missing the kCFStream properties to make this work
+        #else
+            if enableSOCKSProxy {
+                let proxyDict = CFNetworkCopySystemProxySettings()
+                let socksConfig = CFDictionaryCreateMutableCopy(nil, 0, proxyDict!.takeRetainedValue())
+                let propertyKey = CFStreamPropertyKey(rawValue: kCFStreamPropertySOCKSProxy)
+                CFWriteStreamSetProperty(outputStream, propertyKey, socksConfig)
+                CFReadStreamSetProperty(inputStream, propertyKey, socksConfig)
+            }
+        #endif
+        
         guard let inStream = inputStream, let outStream = outputStream else { return }
         inStream.delegate = self
         outStream.delegate = self
@@ -214,15 +228,16 @@ open class FoundationStream : NSObject, WSStream, StreamDelegate  {
     }
     
     public func write(data: Data) -> Int {
-        guard let outStream = outputStream else {return 0}
+        guard let outStream = outputStream else {return -1}
         let buffer = UnsafeRawPointer((data as NSData).bytes).assumingMemoryBound(to: UInt8.self)
         return outStream.write(buffer, maxLength: data.count)
     }
     
     public func read() -> Data? {
+        guard let stream = inputStream else {return nil}
         let buf = NSMutableData(capacity: BUFFER_MAX)
         let buffer = UnsafeMutableRawPointer(mutating: buf!.bytes).assumingMemoryBound(to: UInt8.self)
-        let length = inputStream!.read(buffer, maxLength: BUFFER_MAX)
+        let length = stream.read(buffer, maxLength: BUFFER_MAX)
         if length < 1 {
             return nil
         }
@@ -230,13 +245,13 @@ open class FoundationStream : NSObject, WSStream, StreamDelegate  {
     }
     
     public func cleanup() {
-        outputStream?.delegate = nil
-        inputStream?.delegate = nil
         if let stream = inputStream {
+            stream.delegate = nil
             CFReadStreamSetDispatchQueue(stream, nil)
             stream.close()
         }
         if let stream = outputStream {
+            stream.delegate = nil
             CFWriteStreamSetDispatchQueue(stream, nil)
             stream.close()
         }
@@ -404,7 +419,7 @@ open class WebSocket : NSObject, StreamDelegate, WebSocketClient, WSStreamDelega
         connectedMutex.unlock()
         return isConnected
     }
-
+    public var request: URLRequest //this is only public to allow headers, timeout, etc to be modified on reconnect
     public var currentURL: URL { return request.url! }
 
     public var respondToPingWithPong: Bool = true
@@ -421,8 +436,7 @@ open class WebSocket : NSObject, StreamDelegate, WebSocketClient, WSStreamDelega
         var decompressor:Decompressor? = nil
         var compressor:Compressor? = nil
     }
-
-    private var request: URLRequest
+    
     private var stream: WSStream
     private var connected = false
     private var isConnecting = false
@@ -1253,7 +1267,7 @@ open class WebSocket : NSObject, StreamDelegate, WebSocketClient, WSStreamDelega
                 let stream = s.stream
                 let writeBuffer = UnsafeRawPointer(frame!.bytes+total).assumingMemoryBound(to: UInt8.self)
                 let len = stream.write(data: Data(bytes: writeBuffer, count: offset-total))
-                if len < 0 {
+                if len <= 0 {
                     var error: Error?
                         let errCode = InternalErrorCode.outputStreamWriteError.rawValue
                         error = s.errorWithDetail("output stream error during write", code: errCode)
